@@ -1,0 +1,4 @@
+(executable
+ (public_name heartbeat)
+ (name main)
+ (libraries heartbeat))
