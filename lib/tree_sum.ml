@@ -243,6 +243,9 @@ end
     type kont = Store of int ref | Recur of Tree.t * kont | Accum of int * kont | Join of (int ref) * (unit T.promise) * kont
 
     (* with uniquness this could be in-place. *)
+    (* TODO: this is completely wrong. you're promoting the YOUNGEST stack frame, when you should be promoting the OLDEST!
+       this should find the deepest intance of Recur (t,k') in k, such that there are no Recur in k'.
+    *)
     let [@tail_mod_cons] rec try_promote k =
         match k with
         | Store dst -> Store dst
@@ -274,8 +277,8 @@ end
                     | Accum (x,k') -> a_ref := !a_ref + x; k := k'
                     | Join (r,p,k') ->
                         T.await pool p;
-                        a_ref := !a_ref + !r;
-                        k := k'
+                        (* a_ref := !a_ref + !r; *)
+                        k := Accum (!r, k')
                         (* apply_quit := true; sum_quit := true *)
                 done
             | Some (x,l,r) ->
