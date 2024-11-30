@@ -1,4 +1,5 @@
 (executable
  (public_name heartbeat)
  (name main)
+ (link_flags -linkall)
  (libraries heartbeat))

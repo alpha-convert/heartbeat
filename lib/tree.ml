@@ -1,4 +1,5 @@
-type 'a t = Empty | Node of int * 'a * 'a t * 'a t
+type t = Empty | Node of int * int * t * t
+[@@deriving show]
 
 let size = function
     | Empty -> 0
@@ -10,3 +11,15 @@ let view t =
     match t with
     | Empty -> None
     | Node (_,x,l,r) -> Some (x,l,r)
+
+let quickcheck_generator_t =
+    let open Base_quickcheck.Generator in
+    let open Let_syntax in
+    recursive_union [return empty] ~f:(
+        fun g ->  [
+            let%bind l = g in
+            let%bind r = g in
+            let%bind x = Base_quickcheck.Generator.small_positive_or_zero_int in
+            return (node x l r)
+        ]
+    )

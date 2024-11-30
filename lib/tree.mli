@@ -1,7 +1,10 @@
-type 'a t
+type t
+[@@deriving show]
 
-val empty : 'a t
-val node : 'a -> 'a t -> 'a t -> 'a t
-val size : 'a t -> int
+val empty : t
+val node : int -> t -> t -> t
+val size : t -> int
 
-val view : 'a t -> ('a * 'a t * 'a t) option
+val view : t -> (int * t * t) option
+
+val quickcheck_generator_t : t Core.Quickcheck.Generator.t
