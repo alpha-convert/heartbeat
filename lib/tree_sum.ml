@@ -267,7 +267,7 @@ end
             match !rkf.frame_type with
             | Recur t ->
                 let r = ref 0 in
-                let p = T.async pool (fun () -> print_endline "in a thread"; sum' t (init_kont r)) in
+                let p = T.async pool (fun () -> sum' t (init_kont r)) in
                 !rkf.frame_type <- Join (r,p)
             | _ -> raise (BrokenInvariant "Oldest stack frame is not a recur.")
 
