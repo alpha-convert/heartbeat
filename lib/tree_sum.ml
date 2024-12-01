@@ -229,6 +229,8 @@ module HeartbeatSum(Params : sig
 end
 ) : SUM = struct
 
+    exception InvariantErr of string
+
     module T = Domainslib.Task;;
 
     let pool = T.setup_pool ~num_domains:Params.num_domains ()
@@ -241,33 +243,57 @@ end
 
 
     type kontframe_type =
-    | Recur of Tree.t
-    | Accum of int
-    | Join of (int ref) * (unit T.promise)
+    | Recur of {
+        recur_on : Tree.t;
+        mutable next_youngest : [`IsYoungest | `NextYoungest of kontframe];
+        mutable next_oldest : [`IsOldest | `NextOldest of kontframe]
+    }
+    | Accum of {acc : int}
+    | Join of {
+        dst : int ref;
+        prom : unit T.promise
+    }
+
     
-    type kontframe = {
-        frame_type : kontframe_type;
+    and kontframe = {
+        mutable frame_type : kontframe_type;
         next : [`Nil of int ref | `Box of kontframe]
     }
+    
+    let is_promotable = function
+    | Recur _ -> true
+    | Accum _ -> false
+    | Join _ -> false
 
     type kont = {
+        mutable youngest : kontframe option;
+        mutable oldest : kontframe option;
         mutable frames : [`Nil of int ref | `Box of kontframe]
     }
-    (* type kont = Store of int ref | Recur of Tree.t * kont | Accum of int * kont | Join of (int ref) * (unit T.promise) * kont *)
 
-    (* with uniquness this could be in-place. *)
-    (* TODO: this is completely wrong. you're promoting the YOUNGEST stack frame, when you should be promoting the OLDEST!
-       this should find the deepest intance of Recur (t,k') in k, such that there are no Recur in k'.
-    *)
-    let [@tail_mod_cons] rec try_promote k = ()
-        (* match k with
-        | Store dst -> Store dst
-        | Accum (n,k) -> Accum (n, try_promote k)
-        | Recur (t,k) -> 
+    let rec try_promote k =
+        match k.oldest with
+        | None -> ()
+        | Some ({frame_type = Recur {recur_on = t;next_youngest;next_oldest = `IsOldest};next} as kf) ->
             let r = ref 0 in
-            let p = T.async pool (fun () -> sum' t (Store r)) in
-            Join (r,p,k)
-        | Join (r,p,k) -> Join (r,p,try_promote k) *)
+            let p = T.async pool (fun _ -> sum' t {youngest=None;oldest=None;frames = `Nil r}) in
+            (* tell the younger one that it's now the oldest. *)
+            (match next_youngest with
+            | `IsYoungest -> k.youngest <- None; k.oldest <- None (* you are already the youngest, and the oldest. *)
+            | `NextYoungest kf' -> (match kf'.frame_type with
+                                  | Recur n -> n.next_oldest <- `IsOldest; k.oldest <- Some kf'
+                                  | _ -> raise (InvariantErr "Next younger to promoted pointer is not a recursive.")
+                                 )
+            );
+            (* replace this frame with a join. *)
+
+            (* TODO = introduce this! *)
+            (* kf.frame_type <- Join {dst=r;prom=p} *)
+
+        | Some ({frame_type = Recur _;_}) -> raise (InvariantErr "k-oldest recursive frame not marked as the oldest.")
+        | Some ({frame_type = Join _;_}) -> raise (InvariantErr "oldest \'promotable\' frame is already promoted")
+        | Some ({frame_type = _;_}) -> raise (InvariantErr "oldest \'promotable\' frame is not a recursive frame")
+        
 
     and sum' t (k : kont) =
         let t = ref t in
@@ -281,40 +307,74 @@ end
                 let apply_quit = ref false in
                 while not !apply_quit do
                     if heartbeat () then try_promote k else ();
+                    (* Branch on the top stack frame *)
                     match k.frames with
+                    (* if there are no more frames, we write the ccurent accumulator to the destination, and return. *)
                     | `Nil dst -> dst := !a_ref; apply_quit := true; sum_quit := true
                     | `Box frame ->  (
                         match frame.frame_type with
-                        | Recur t' ->
+                        | Recur {recur_on = t';next_youngest = `IsYoungest;next_oldest} -> 
+                            (* Set t and k for next iterations. *)
                             t := t';
-                            k.frames <- `Box {frame_type = Accum !a_ref; next = frame.next};
-                            apply_quit := true
-                        | Accum x ->
-                            a_ref := !a_ref + x;
+                            k.frames <- `Box {frame_type = Accum {acc = !a_ref}; next = frame.next};
+                            (* jump out of the apply loop, and start traversing t. *)
+                            apply_quit := true;
+                            (* update the promotable list. We just popped the youngest promotable frame, so the next youngest is now the youngest. *)
+                            (match next_oldest with
+                             | `IsOldest -> (); k.youngest <- None; k.oldest <- None
+                             | `NextOldest frame' -> (match frame'.frame_type with
+                                                      | Recur rf -> rf.next_youngest <- `IsYoungest; k.youngest <- Some frame'
+                                                      | Join _ -> raise (InvariantErr "Next oldest promotable has already been promoted.")
+                                                      | _ -> raise (InvariantErr "Next oldest promotable is not a recur frame")
+                                                     )
+                            );
+
+                        (* If the top frame is a recur and it's not the youngest, my invariants have been borked.  *)
+                        | Recur {next_youngest = _;_} -> raise (InvariantErr "Top Recur frame is not marked youngest")
+
+                        | Accum {acc} ->
+                            a_ref := !a_ref + acc;
                             k.frames <- frame.next
-                        | Join (r,p) ->
-                            T.await pool p;
-                            k.frames <- `Box {frame_type = Accum !r; next = frame.next}
-                    )
-                        (*
-                        Recur (t',k') -> 
-                        t := t';
-                        k := Accum (!a_ref,k');
-                        apply_quit := true
-                    | Accum (x,k') -> a_ref := !a_ref + x; k := k'
-                    | Join (r,p,k') ->
-                        T.await pool p;
-                        (* a_ref := !a_ref + !r; *)
-                        k := Accum (!r, k')
-                        (* apply_quit := true; sum_quit := true *)
-                        *)
+                        | Join {dst;prom} ->
+                            T.await pool prom;
+                            k.frames <- `Box {frame_type = Accum {acc = !dst}; next = frame.next}
+                        )
                 done
             | Some (x,l,r) ->
                 t := l;
-                k.frames <- `Box {frame_type = Recur r; next = `Box {frame_type = Accum x; next = k.frames}}
-                (* Recur (r,Accum (x,!k)) *)
+                (* we are going to push the recursive call to r onto the stack. this is now the youngest frame.*)
+                let acc_frame = {frame_type = Accum {acc = x}; next = k.frames} in
+                let recur_frame : kontframe = {frame_type = Recur {
+                                                                recur_on = r;
+                                                                next_youngest = `IsYoungest;
+                                                                next_oldest = (match k.youngest with
+                                                                                | None -> `IsOldest (* we update k.youngest later*)
+                                                                                | Some f ->  assert (is_promotable f.frame_type); `NextOldest f
+                                                                              )
+                                                            };
+                                                next = `Box acc_frame
+                                               }
+                in
+                k.frames <- `Box recur_frame;
+                (* The preivously-youngest pointer is now the next youngest. *)
+                (match k.youngest with
+                 | None -> ()
+                 | Some v -> (match v.frame_type with
+                              | Recur f -> assert (is_promotable recur_frame.frame_type); f.next_youngest <- `NextYoungest recur_frame
+                              | _ -> raise (InvariantErr "blargh")
+                             )
+                );
+                k.youngest <- Some recur_frame;
+                (* the recursive frame to call r is now the youngest promotable frame *)
+                assert (is_promotable recur_frame.frame_type);
+                (* if there's no oldest frame, we need to push this one. *)
+                k.oldest <- (
+                    match k.oldest with
+                    | None -> Some recur_frame
+                    | Some f -> Some f
+                )
         done
-    let sum t = T.run pool (fun () -> let r = ref 0 in sum' t ({frames = `Nil r}); !r)
+    let sum t = T.run pool (fun () -> let r = ref 0 in sum' t ({frames = `Nil r; youngest = None; oldest = None}); !r)
 end
 
 module ForkJoinSum(Params : sig
