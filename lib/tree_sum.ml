@@ -246,32 +246,33 @@ end
     | Join of (int ref) * (unit T.promise)
     
     type kontframe = {
-        frame_type : kontframe_type;
+        mutable frame_type : kontframe_type;
         next : [`Nil of int ref | `Box of kontframe]
     }
 
     type kont = {
+        (* front is young, back is old. *)
+        promotable_dq : (kontframe ref) Core.Deque.t;
         mutable frames : [`Nil of int ref | `Box of kontframe]
     }
-    (* type kont = Store of int ref | Recur of Tree.t * kont | Accum of int * kont | Join of (int ref) * (unit T.promise) * kont *)
 
-    (* with uniquness this could be in-place. *)
-    (* TODO: this is completely wrong. you're promoting the YOUNGEST stack frame, when you should be promoting the OLDEST!
-       this should find the deepest intance of Recur (t,k') in k, such that there are no Recur in k'.
-    *)
-    let [@tail_mod_cons] rec try_promote k = ()
-        (* match k with
-        | Store dst -> Store dst
-        | Accum (n,k) -> Accum (n, try_promote k)
-        | Recur (t,k) -> 
-            let r = ref 0 in
-            let p = T.async pool (fun () -> sum' t (Store r)) in
-            Join (r,p,k)
-        | Join (r,p,k) -> Join (r,p,try_promote k) *)
+    let init_kont r = {promotable_dq = Core.Deque.create();frames = `Nil r}
+
+    exception BrokenInvariant of string
+
+    let rec try_promote k =
+        match Core.Deque.dequeue_back k.promotable_dq with
+        | None -> ()
+        | Some rkf ->
+            match !rkf.frame_type with
+            | Recur t ->
+                let r = ref 0 in
+                let p = T.async pool (fun () -> print_endline "in a thread"; sum' t (init_kont r)) in
+                !rkf.frame_type <- Join (r,p)
+            | _ -> raise (BrokenInvariant "Oldest stack frame is not a recur.")
 
     and sum' t (k : kont) =
         let t = ref t in
-        (* let k = ref k in *)
         let sum_quit = ref false in
         while not !sum_quit do
             if heartbeat () then try_promote k else ();
@@ -288,7 +289,8 @@ end
                         | Recur t' ->
                             t := t';
                             k.frames <- `Box {frame_type = Accum !a_ref; next = frame.next};
-                            apply_quit := true
+                            apply_quit := true;
+                            let _ = Core.Deque.dequeue_front_exn k.promotable_dq in ()
                         | Accum x ->
                             a_ref := !a_ref + x;
                             k.frames <- frame.next
@@ -296,25 +298,15 @@ end
                             T.await pool p;
                             k.frames <- `Box {frame_type = Accum !r; next = frame.next}
                     )
-                        (*
-                        Recur (t',k') -> 
-                        t := t';
-                        k := Accum (!a_ref,k');
-                        apply_quit := true
-                    | Accum (x,k') -> a_ref := !a_ref + x; k := k'
-                    | Join (r,p,k') ->
-                        T.await pool p;
-                        (* a_ref := !a_ref + !r; *)
-                        k := Accum (!r, k')
-                        (* apply_quit := true; sum_quit := true *)
-                        *)
                 done
             | Some (x,l,r) ->
                 t := l;
-                k.frames <- `Box {frame_type = Recur r; next = `Box {frame_type = Accum x; next = k.frames}}
-                (* Recur (r,Accum (x,!k)) *)
+                let kf_accum = {frame_type = Accum x; next = k.frames} in
+                let kf_recur = {frame_type = Recur r; next = `Box kf_accum} in
+                Core.Deque.enqueue_front k.promotable_dq (ref kf_recur);
+                k.frames <- `Box kf_recur
         done
-    let sum t = T.run pool (fun () -> let r = ref 0 in sum' t ({frames = `Nil r}); !r)
+    let sum t = T.run pool (fun () -> let r = ref 0 in sum' t (init_kont r); !r)
 end
 
 module ForkJoinSum(Params : sig
