@@ -129,13 +129,13 @@ module TR_ICPS_Defunc : SUM = struct
     type kont = Store of int ref | Recur of Tree.t * kont | Accum of int * kont
     let rec apply k a =
         let k_ref = ref k in
-        let a_ref = ref a in
+        let acc = ref a in
         let quit = ref false in
         while not !quit do
             match !k_ref with
-            | Store dst -> dst := !a_ref; quit := true
-            | Recur (t,k) -> sum' t (Accum (!a_ref,k)); quit := true
-            | Accum (x,k') -> a_ref := !a_ref + x; k_ref := k'
+            | Store dst -> dst := !acc; quit := true
+            | Recur (t,k) -> sum' t (Accum (!acc,k)); quit := true
+            | Accum (x,k') -> acc := !acc + x; k_ref := k'
         done
     and sum' t k =
         match Tree.view t with
@@ -155,13 +155,13 @@ module Inlined_TR_ICPS_Defunc : SUM = struct
         match Tree.view t with
         | None ->
             let k_ref = ref k in
-            let a_ref = ref 0 in
+            let acc = ref 0 in
             let quit = ref false in
             while not !quit do
                 match !k_ref with
-                | Store dst -> dst := !a_ref; quit := true
-                | Recur (t,k') -> sum' t (Accum (!a_ref,k')); quit := true
-                | Accum (x,k') -> a_ref := !a_ref + x; k_ref := k'
+                | Store dst -> dst := !acc; quit := true
+                | Recur (t,k') -> sum' t (Accum (!acc,k')); quit := true
+                | Accum (x,k') -> acc := !acc + x; k_ref := k'
             done
         | Some (x,l,r) -> sum' l (Recur (r,Accum (x,k)))
 
@@ -178,16 +178,16 @@ module Complete : SUM = struct
         while not !sum_quit do
             match Tree.view !t with
             | None ->
-                let a_ref = ref 0 in
+                let acc = ref 0 in
                 let apply_quit = ref false in
                 while not !apply_quit do
                     match !k with
-                    | Store dst -> dst := !a_ref; apply_quit := true; sum_quit := true
+                    | Store dst -> dst := !acc; apply_quit := true; sum_quit := true
                     | Recur (t',k') -> 
                         t := t';
-                        k := Accum (!a_ref,k');
+                        k := Accum (!acc,k');
                         apply_quit := true
-                    | Accum (x,k') -> a_ref := !a_ref + x; k := k'
+                    | Accum (x,k') -> acc := !acc + x; k := k'
                 done
             | Some (x,l,r) ->
                 t := l;
@@ -274,21 +274,21 @@ end
             if heartbeat () then try_promote k else ();
             match Tree.view !t with
             | None ->
-                let a_ref = ref 0 in
+                let acc = ref 0 in
                 let apply_quit = ref false in
                 while not !apply_quit do
                     if heartbeat () then try_promote k else ();
                     match k.frames with
-                    | `Nil dst -> dst := !a_ref; apply_quit := true; sum_quit := true
+                    | `Nil dst -> dst := !acc; apply_quit := true; sum_quit := true
                     | `Box frame ->  (
                         match frame.frame_type with
                         | Recur t' ->
                             t := t';
-                            k.frames <- `Box {frame_type = Accum !a_ref; next = frame.next};
+                            k.frames <- `Box {frame_type = Accum !acc; next = frame.next};
                             apply_quit := true;
                             let _ = Core.Deque.dequeue_front_exn k.promotable_dq in ()
                         | Accum x ->
-                            a_ref := !a_ref + x;
+                            acc := !acc + x;
                             k.frames <- frame.next
                         | Join (r,p) ->
                             T.await pool p;
