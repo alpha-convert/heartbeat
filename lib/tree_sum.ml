@@ -233,13 +233,6 @@ end
 
     let pool = T.setup_pool ~num_domains:Params.num_domains ()
 
-    let heartbeat =
-        let beats = ref 0 in
-        fun () ->
-            if !beats == Params.heartbeat_rate then (beats := 0; true)
-            else (incr beats; false)
-
-
     type kontframe_type =
     | Recur of Tree.t
     | Accum of int
@@ -267,12 +260,15 @@ end
             match !rkf.frame_type with
             | Recur t ->
                 let r = ref 0 in
-                let p = T.async pool (fun () -> sum' t (init_kont r)) in
+                let p = T.async pool (fun () -> sum' (ref t) (init_kont r) (ref 0)) in
                 !rkf.frame_type <- Join (r,p)
             | _ -> raise (BrokenInvariant "Oldest stack frame is not a recur.")
 
-    and sum' t (k : kont) =
-        let t = ref t in
+    and sum' t (k : kont) beats =
+        let heartbeat () =
+            if !beats >= Params.heartbeat_rate then (beats := 0; true)
+            else (incr beats; false)
+        in
         let sum_quit = ref false in
         while not !sum_quit do
             if heartbeat () then try_promote k else ();
@@ -306,7 +302,9 @@ end
                 Core.Deque.enqueue_front k.promotable_dq (ref kf_recur);
                 k.frames <- `Box kf_recur
         done
-    let sum t = T.run pool (fun () -> let r = ref 0 in sum' t (init_kont r); !r)
+    let sum t = T.run pool (fun () -> 
+        let r = ref 0 in sum' (ref t) (init_kont r) (ref 0); !r
+    )
 end
 
 module ForkJoinSum(Params : sig
