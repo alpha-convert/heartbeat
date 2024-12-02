@@ -1,5 +1,6 @@
 (test
  (libraries ppx_mica domainslib saturn)
  (preprocess (pps ppx_mica ppx_deriving.show ppx_jane))
+ (link_flags -linkall)
  (name test_heartbeat))
 
