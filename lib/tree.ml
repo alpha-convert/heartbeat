@@ -12,6 +12,7 @@ let view t =
     | Empty -> None
     | Node (_,x,l,r) -> Some (x,l,r)
 
+(* TODO: i think this only returns totally balacned trees, oops. *)
 let quickcheck_generator_t =
     let open Base_quickcheck.Generator in
     let open Let_syntax in
@@ -22,4 +23,15 @@ let quickcheck_generator_t =
             let%bind x = Base_quickcheck.Generator.small_positive_or_zero_int in
             return (node x l r)
         ]
+    )
+let generate_balanced =
+    let open Core.Quickcheck.Generator in
+    let open Core.Quickcheck.Let_syntax in
+    fixed_point (fun gt ->
+        let%bind n = size in
+        if n == 0 then return empty else
+        let%bind l = with_size ~size:(n-1) gt in
+        let%bind r = with_size ~size:(n-1) gt in
+        let%bind x = small_non_negative_int in
+        return (node x l r)
     )
