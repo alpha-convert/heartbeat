@@ -25,10 +25,10 @@ let () =
   let depths = [18] in
   let depths_and_names = List.map ~f:(fun n -> (Int.to_string n,n)) depths in
   Bench.bench 
-    ~run_config:(Bench.Run_config.create ~quota:(Bench.Quota.Num_calls 10000) ())
+    ~run_config:(Bench.Run_config.create ~quota:(Bench.Quota.Num_calls 500) ())
   [
     Bench.Test.create_group ~name:"balanced" [
-      Bench.Test.create_parameterised ~args:depths_and_names ~name:"recursive" @@
+      (*Bench.Test.create_parameterised ~args:depths_and_names ~name:"recursive" @@
       (
         fun n -> 
         let t = Core.Quickcheck.random_value ~size:n Tree.generate_balanced in
@@ -77,18 +77,6 @@ let () =
         let t = Core.Quickcheck.random_value ~size:n Tree.generate_balanced in
         Core.stage @@ fun () -> Tree_sum.ICPSDefunc.sum t
       );
-      (* Bench.Test.create_parameterised ~args:depths_and_names ~name:"tr-icps-defunc" @@
-      (
-        fun n -> 
-        let t = Core.Quickcheck.random_value ~size:n Tree.generate_balanced in
-        Core.stage @@ fun () -> Tree_sum.TR_ICPS_Defunc.sum t
-      );
-      Bench.Test.create_parameterised ~args:depths_and_names ~name:"inlined-tr-icps-defunc" @@
-      (
-        fun n -> 
-        let t = Core.Quickcheck.random_value ~size:n Tree.generate_balanced in
-        Core.stage @@ fun () -> Tree_sum.Inlined_TR_ICPS_Defunc.sum t
-      ); *)
       Bench.Test.create_parameterised ~args:depths_and_names ~name:"complete" @@
       (
         fun n -> 
@@ -140,6 +128,14 @@ let () =
       (
         let heartbeat_rate = 10000000 in
         fun n -> refresh_pool(); let module Params = struct let pool = pool;; let heartbeat_rate = heartbeat_rate end in let module HB = Tree_sum.HeartbeatSum(Params) in
+        let t = Core.Quickcheck.random_value ~size:n Tree.generate_balanced in
+        Core.stage @@ fun () -> HB.sum t
+      );
+      *)
+      Bench.Test.create_parameterised ~args:depths_and_names ~name:"hb-uopt" @@
+      (
+        let heartbeat_rate = 10000000 in
+        fun n -> refresh_pool(); let module Params = struct let pool = pool;; let heartbeat_rate = heartbeat_rate end in let module HB = Tree_sum.HeartbeatSumUopt(Params) in
         let t = Core.Quickcheck.random_value ~size:n Tree.generate_balanced in
         Core.stage @@ fun () -> HB.sum t
       );

@@ -447,13 +447,13 @@ end
         let sum_quit = ref false in
         while not !sum_quit do
             (* at the start of each iteration, promote the oldest Recursive *)
-            (* if heartbeat () then try_promote k else (); *)
+            if heartbeat () then try_promote k else ();
             match !t with
             | Tree.Empty ->
                 let acc = ref 0 in
                 let apply_quit = ref false in
                 while not !apply_quit do
-                    (* if heartbeat () then try_promote k else (); *)
+                    if heartbeat () then try_promote k else ();
                     if Uopt.is_none k.head then (k.return_ref := !acc; apply_quit := true; sum_quit := true)
                     else
                         let frame = Uopt.unsafe_value k.head in
@@ -462,7 +462,7 @@ end
                             t := t';
                             k.head <- Uopt.some {frame_type = Accum !acc; next = frame.next };
                             apply_quit := true;
-                            (* let _ = Core.Deque.dequeue_front_exn k.promotable_dq in (); *)
+                            let _ = Core.Deque.dequeue_front_exn k.promotable_dq in ();
                         | Accum x -> acc := !acc + x; k.head <- frame.next
                         | Join (r,p) ->
                             T.await !Params.pool p;
@@ -472,7 +472,7 @@ end
                 t := l;
                 let kf_accum = {frame_type = Accum x; next = k.head} in
                 let kf_recur = {frame_type = Recur r; next = Uopt.some kf_accum} in
-                (* Core.Deque.enqueue_front k.promotable_dq kf_recur; *)
+                Core.Deque.enqueue_front k.promotable_dq kf_recur;
                 k.head <- Uopt.some kf_recur;
         done
     let sum t = T.run !Params.pool (fun () -> let r = ref 0 in sum' (ref t) (init_kont r) (ref 0); !r)
