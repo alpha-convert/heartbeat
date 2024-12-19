@@ -1,16 +1,20 @@
 type t = Empty | Node of int * int * t * t
 [@@deriving show]
 
-let size = function
-    | Empty -> 0
-    | Node (s,_,_,_) -> s
-let empty = Empty
-let node x l r = Node (1 + size l + size r,x,l,r)
-
-let view t =
+let view t  =
     match t with
     | Empty -> None
     | Node (_,x,l,r) -> Some (x,l,r)
+[@@inline]
+
+let size = function
+    | Empty -> 0
+    | Node (s,_,_,_) -> s
+[@@inline]
+let empty = Empty
+let node x l r = Node (1 + size l + size r,x,l,r)
+[@@inline]
+
 
 (* TODO: i think this only returns totally balacned trees, oops. *)
 let quickcheck_generator_t =
@@ -34,4 +38,18 @@ let generate_balanced =
         let%bind r = with_size ~size:(n-1) gt in
         let%bind x = small_non_negative_int in
         return (node x l r)
+    )
+
+let generate_stringy =
+    let open Core.Quickcheck.Generator in
+    let open Core.Quickcheck.Let_syntax in
+    fixed_point (fun self ->
+        let%bind n = size in
+        if n == 0 then return empty else
+        let%bind t = with_size ~size:(n-1) self in
+        let%bind x = small_non_negative_int in
+        weighted_union [
+            (1.0,return (node x t empty));
+            (1.0,return (node x empty t));
+        ]
     )
