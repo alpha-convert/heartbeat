@@ -398,6 +398,86 @@ end
     let sum t = T.run !Params.pool (fun () -> let r = ref 0 in sum' (ref t) (init_kont r) (ref 0); !r)
 end
 
+module HeartbeatSumUopt (Params : sig
+    val heartbeat_rate : int
+    val pool : T.pool ref
+end
+) : SUM
+= struct
+
+    type kontframe_type = Recur of Tree.t | Accum of int | Join of int ref * unit T.promise
+
+    type kontframe = {
+        mutable frame_type : kontframe_type;
+        mutable next : kontframe Uopt.t;
+    }
+
+    (* a continuation is (a) a linked list of frames, just like before, and
+     (b) a deque of pointers to Recur frames. The front of the queue is the youngest stack frame, most recently pushed.
+       the rear of the queue is the oldest stack frame, the closest to being promoted.
+    *)
+    type kont = {
+        (* front is young, back is old. *)
+        promotable_dq : kontframe Core.Deque.t;
+        mutable head : kontframe Uopt.t;
+        return_ref : int ref
+
+    }
+
+    let init_kont r = {promotable_dq = Core.Deque.create ~initial_length:100 () ;head = Uopt.none; return_ref = r}
+
+    exception BrokenInvariant of string
+
+    let rec try_promote k =
+        match Core.Deque.dequeue_back k.promotable_dq with
+        | None -> ()
+        | Some kf ->
+            match kf.frame_type with
+            | Recur t ->
+                let r = ref 0 in
+                let p = T.async !Params.pool (fun () -> sum' (ref t) (init_kont r) (ref 0)) in
+                kf.frame_type <- Join (r,p)
+            | _ -> raise (BrokenInvariant "Oldest stack frame is not a recur.")
+
+    and sum' t (k : kont) beats =
+        let heartbeat () =
+            if !beats >= Params.heartbeat_rate then (beats := 0; true)
+            else (incr beats; false)
+        in
+        let sum_quit = ref false in
+        while not !sum_quit do
+            (* at the start of each iteration, promote the oldest Recursive *)
+            (* if heartbeat () then try_promote k else (); *)
+            match !t with
+            | Tree.Empty ->
+                let acc = ref 0 in
+                let apply_quit = ref false in
+                while not !apply_quit do
+                    (* if heartbeat () then try_promote k else (); *)
+                    if Uopt.is_none k.head then (k.return_ref := !acc; apply_quit := true; sum_quit := true)
+                    else
+                        let frame = Uopt.unsafe_value k.head in
+                        match frame.frame_type with
+                        | Recur t' ->
+                            t := t';
+                            k.head <- Uopt.some {frame_type = Accum !acc; next = frame.next };
+                            apply_quit := true;
+                            (* let _ = Core.Deque.dequeue_front_exn k.promotable_dq in (); *)
+                        | Accum x -> acc := !acc + x; k.head <- frame.next
+                        | Join (r,p) ->
+                            T.await !Params.pool p;
+                            k.head <- Uopt.some {frame_type = Accum !r; next = k.head};
+                done
+            | Node (_,x,l,r) ->
+                t := l;
+                let kf_accum = {frame_type = Accum x; next = k.head} in
+                let kf_recur = {frame_type = Recur r; next = Uopt.some kf_accum} in
+                (* Core.Deque.enqueue_front k.promotable_dq kf_recur; *)
+                k.head <- Uopt.some kf_recur;
+        done
+    let sum t = T.run !Params.pool (fun () -> let r = ref 0 in sum' (ref t) (init_kont r) (ref 0); !r)
+end
+
 module ForkJoinSum(Params : sig
     val pool : T.pool ref
     val fork_cutoff : int
@@ -462,6 +542,17 @@ let%test_unit "Recursive/Heartbeat" =
         let heartbeat_rate = 3
     end in
     let module HB = HeartbeatSum(Params) in
+    let open Mica.TestHarness(Recursive)(HB) in
+    run_tests ();
+    T.teardown_pool !pool
+
+let%test_unit "Recursive/Heartbeat" =
+    let pool = ref @@ T.setup_pool ~num_domains:0 () in
+    let module Params = struct
+        let pool = pool
+        let heartbeat_rate = 1000000000000000000
+    end in
+    let module HB = HeartbeatSumUopt(Params) in
     let open Mica.TestHarness(Recursive)(HB) in
     run_tests ();
     T.teardown_pool !pool
