@@ -379,7 +379,7 @@ end
                             t := t';
                             k.frames <- `Box {frame_type = Accum !acc; next = frame.next};
                             apply_quit := true;
-                            let _ = Core.Deque.dequeue_front_exn k.promotable_dq in ()
+                            ignore (Core.Deque.dequeue_front_exn k.promotable_dq)
                         | Accum x ->
                             acc := !acc + x;
                             k.frames <- frame.next
@@ -409,7 +409,7 @@ end
 
     type kontframe = {
         mutable frame_type : kontframe_type;
-        mutable next : kontframe Uopt.t;
+        next : kontframe Uopt.t;
     }
 
     (* a continuation is (a) a linked list of frames, just like before, and
@@ -462,7 +462,7 @@ end
                             t := t';
                             k.head <- Uopt.some {frame_type = Accum !acc; next = frame.next };
                             apply_quit := true;
-                            let _ = Core.Deque.dequeue_front_exn k.promotable_dq in ();
+                            ignore (Core.Deque.dequeue_front_exn k.promotable_dq)
                         | Accum x -> acc := !acc + x; k.head <- frame.next
                         | Join (r,p) ->
                             T.await !Params.pool p;
@@ -476,6 +476,79 @@ end
                 k.head <- Uopt.some kf_recur;
         done
     let sum t = T.run !Params.pool (fun () -> let r = ref 0 in sum' (ref t) (init_kont r) (ref 0); !r)
+end
+
+module HeartbeatSumUoptLoop (Params : sig
+    val heartbeat_rate : int
+    val pool : T.pool ref
+end
+) : SUM
+= struct
+
+    type kontframe_type = Recur of Tree.t | Accum of int | Join of int ref * unit T.promise
+
+    type kontframe = {
+        mutable frame_type : kontframe_type;
+        next : kontframe Uopt.t;
+    }
+
+    (* a continuation is (a) a linked list of frames, just like before, and
+     (b) a deque of pointers to Recur frames. The front of the queue is the youngest stack frame, most recently pushed.
+       the rear of the queue is the oldest stack frame, the closest to being promoted.
+    *)
+    type kont = {
+        (* front is young, back is old. *)
+        promotable_dq : kontframe Core.Deque.t;
+        head : kontframe Uopt.t;
+        return_ref : int ref
+
+    }
+
+    let init_kont r = {promotable_dq = Core.Deque.create ~initial_length:100 () ;head = Uopt.none; return_ref = r}
+
+    exception BrokenInvariant of string
+
+    let rec try_promote k =
+        match Core.Deque.dequeue_back k.promotable_dq with
+        | None -> ()
+        | Some kf ->
+            match kf.frame_type with
+            | Recur t ->
+                let r = ref 0 in
+                let p = T.async !Params.pool (fun () -> go t (init_kont r) ~beats:0) in
+                kf.frame_type <- Join (r,p)
+            | _ -> raise (BrokenInvariant "Oldest stack frame is not a recur.")
+
+    and go t (k : kont) ~beats =
+        let heartbeat () =
+            if beats >= Params.heartbeat_rate then (0, true)
+            else (beats + 1, false)
+        in
+        let (beats,hb) = heartbeat() in
+        if hb then try_promote k;
+        match t with
+        | Tree.Empty -> apply k ~beats:beats ~acc:0
+        | Tree.Node(_,x,l,r) -> 
+            let kf_accum = {frame_type = Accum x; next = k.head} in
+            let kf_recur = {frame_type = Recur r; next = Uopt.some kf_accum} in
+            Core.Deque.enqueue_front k.promotable_dq kf_recur;
+            go l {k with head = Uopt.some kf_recur} ~beats:beats
+    and [@inline] apply k ~beats ~acc =
+        if Uopt.is_none k.head then k.return_ref := acc
+        else
+            let frame = Uopt.unsafe_value k.head in
+            match frame.frame_type with
+            | Recur t' ->
+                ignore (Core.Deque.dequeue_front_exn k.promotable_dq);
+                let acc_frame = Uopt.some {frame_type = Accum acc; next = frame.next} in
+                go t' {k with head = acc_frame} ~beats
+            | Accum x -> apply {k with head = frame.next} ~beats:beats ~acc:(acc + x)
+            | Join (r,p) ->
+                T.await !Params.pool p;
+                let acc_frame = Uopt.some {frame_type = Accum !r; next = k.head} in
+                apply {k with head = acc_frame} ~beats:beats ~acc:acc
+            
+    let sum t = T.run !Params.pool (fun () -> let r = ref 0 in go t (init_kont r) ~beats:0; !r)
 end
 
 module ForkJoinSum(Params : sig
