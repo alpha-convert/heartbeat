@@ -1,5 +1,4 @@
 type t = Empty | Node of int * int * t * t
-[@@deriving show]
 
 val empty : t
 val node : int -> t -> t -> t

@@ -1,5 +1,4 @@
 type t = Empty | Node of int * int * t * t
-[@@deriving show]
 
 let view t  =
     match t with
