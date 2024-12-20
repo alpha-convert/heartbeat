@@ -1,6 +1,5 @@
 (executable
  (public_name heartbeat)
- (libraries heartbeat core core_bench))
  (name main)
  (link_flags -linkall)
  (libraries heartbeat core core_bench))
