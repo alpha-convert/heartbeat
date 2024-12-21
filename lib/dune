@@ -1,5 +1,5 @@
 (library
- (libraries ppx_inline_test base_quickcheck ppx_quick_test core_bench core core_kernel)
+ (libraries ppx_inline_test base_quickcheck ppx_quick_test core_bench core)
  (inline_tests)
  (preprocess (pps ppx_jane ))
  (name heartbeat))
