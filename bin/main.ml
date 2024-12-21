@@ -16,10 +16,8 @@ Moving the task between domains *requires* promoting it.
 Potential performance problems might be because of the allocations of the traversa/sum itself.
 *)
 let num_domains = 0
-let pool = ref (Domainslib.Task.setup_pool ~num_domains:num_domains ())
-let refresh_pool () =
-  Domainslib.Task.teardown_pool !pool;
-  pool := Domainslib.Task.setup_pool ~num_domains:num_domains ()
+let pool = ref (Fake_task.setup_pool ~num_domains:num_domains ())
+let refresh_pool () = ()
 
 let () = 
   let depths = [18] in

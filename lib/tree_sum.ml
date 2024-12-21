@@ -1,8 +1,9 @@
 module type SUM = sig
-    val sum : Tree.t -> int [@@zero_alloc]
+    val sum : Tree.t -> int 
 end
 
-module T = Domainslib.Task;;
+
+module T = Fake_task;;
 
 (*
 VERSION 1
@@ -501,7 +502,6 @@ end) : (sig
     include SUM
     val teardown : unit -> unit
  end) = struct
-    module T = Domainslib.Task;;
 
     let rec fj_sum t () =
         if Tree.size t < Params.fork_cutoff then RecursiveLeak.sum t else
